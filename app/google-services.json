@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "359180023867",
+    "project_id": "moodmanager-8635b",
+    "storage_bucket": "moodmanager-8635b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:359180023867:android:708c7b8aac4860e18fc41e",
+        "android_client_info": {
+          "package_name": "com.moodmanager.watch"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAF-2qsNOhwlOg2zO6oeaNoXuwTf-BMEos"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
