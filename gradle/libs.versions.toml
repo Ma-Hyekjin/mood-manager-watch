@@ -11,6 +11,7 @@ coreSplashscreen = "1.0.1"
 firebaseBom = "33.1.1"
 googleGmsServices = "4.4.2"
 lifecycleViewmodel = "2.8.1"
+healthConnect = "1.1.0"
 
 
 [libraries]
@@ -30,7 +31,7 @@ core-splashscreen = { group = "androidx.core", name = "core-splashscreen", versi
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-firestore-ktx = { group = "com.google.firebase", name = "firebase-firestore-ktx" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodel" }
-
+androidx-health-connect-client = { group = "androidx.health.connect", name = "connect-client", version.ref = "healthConnect" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
