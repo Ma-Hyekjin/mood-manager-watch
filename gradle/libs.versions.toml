@@ -1,40 +1,52 @@
 [versions]
-agp = "8.7.2"
+agp = "8.9.1" # Android Gradle Plugin 버전 (프로젝트 전체 빌드 도구 버전)
 kotlin = "2.0.21"
-playServicesWearable = "19.0.0"
-composeBom = "2024.09.00"
-composeMaterial = "1.2.1"
+playServicesWearable = "19.0.0" # Wear OS용 Play Services (워치-폰 통신 등)
+composeBom = "2024.09.00" # Compose BOM: 화면 그리기 관련 Compose 버전 묶음
+composeMaterial = "1.2.1" # Wear OS 전용 Compose Material / Foundation
 composeFoundation = "1.2.1"
-wearToolingPreview = "1.0.0"
-activityCompose = "1.9.0"
-coreSplashscreen = "1.0.1"
-firebaseBom = "33.1.1"
-googleGmsServices = "4.4.2"
-lifecycleViewmodel = "2.8.1"
-healthConnect = "1.1.0"
-
+wearToolingPreview = "1.0.0" # Wear OS UI 미리보기용 툴링
+activityCompose = "1.9.0" # Activity + Compose 연동용
+coreSplashscreen = "1.0.1" # 스플래시 스크린 라이브러리
+firebaseBom = "33.1.1" # Firebase 전체 BOM (Firestore, Auth 등 버전 묶음)
+googleGmsServices = "4.4.2" # Google 서비스 플러그인 (Firebase 연동용)
+lifecycleViewmodel = "2.8.1" # ViewModel + Compose 연동용
+healthServices = "1.1.0-alpha04"
 
 [libraries]
+# Wear OS 기기 간 통신용 (Play Services)
 play-services-wearable = { group = "com.google.android.gms", name = "play-services-wearable", version.ref = "playServicesWearable" }
+# Compose BOM (버전 묶음)
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+# 기본 Compose UI
 ui = { group = "androidx.compose.ui", name = "ui" }
 ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+# Wear OS용 Compose Material / Foundation (원형 UI 컴포넌트)
 compose-material = { group = "androidx.wear.compose", name = "compose-material", version.ref = "composeMaterial" }
 compose-foundation = { group = "androidx.wear.compose", name = "compose-foundation", version.ref = "composeFoundation" }
 wear-tooling-preview = { group = "androidx.wear", name = "wear-tooling-preview", version.ref = "wearToolingPreview" }
+# Activity + Compose
 activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+# 스플래시 스크린
 core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "coreSplashscreen" }
+# Firebase Firestore (실제 데이터 업로드/조회용)
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-firestore-ktx = { group = "com.google.firebase", name = "firebase-firestore-ktx" }
+# ViewModel + Compose 연동
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodel" }
-androidx-health-connect-client = { group = "androidx.health.connect", name = "connect-client", version.ref = "healthConnect" }
+# Health Service 연동
+androidx-health-services-client = { group = "androidx.health", name = "health-services-client", version.ref = "healthServices" }
 
 [plugins]
+# 안드로이드 앱 모듈용 플러그인
 android-application = { id = "com.android.application", version.ref = "agp" }
+# Kotlin Android 플러그인
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+# Kotlin + Compose 연동 플러그인
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+# Firebase/Play Services 설정용 플러그인
 google-gms-google-services = { id = "com.google.gms.google-services", version.ref = "googleGmsServices" }

@@ -1,52 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
+    <!--
+        공통 권한
+        - INTERNET        : Firestore 등 네트워크 통신
+        - WAKE_LOCK       : 서비스 동작 중 CPU가 잠들지 않도록 유지
+        - FOREGROUND_SERVICE / FOREGROUND_SERVICE_DATA_SYNC : 주기적 데이터 동기화용 포그라운드 서비스
+        - POST_NOTIFICATIONS : 알림 권한 (Android 13+)
+    -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.type.watch" />
+    <uses-permission android:name="android.permission.BODY_SENSORS" />
 
-    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
-    <uses-permission android:name="android.permission.health.READ_HEART_RATE_VARIABILITY_SDNN" /> <uses-permission android:name="android.permission.health.READ_RESPIRATORY_RATE" />
-    <uses-permission android:name="android.permission.health.READ_SLEEP" /> <application
-    android:allowBackup="true"
-    android:icon="@mipmap/ic_launcher"
-    android:label="@string/app_name"
-    android:supportsRtl="true"
-    android:theme="@android:style/Theme.DeviceDefault">
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault">
 
-    <uses-library android:name="com.google.android.wearable" android:required="true" />
-    <uses-library android:name="wear-sdk" android:required="false" />
-    <meta-data android:name="com.google.android.wearable.standalone" android:value="true" />
+        <!--
+            Wear OS 라이브러리 설정
+            - com.google.android.wearable : Google 웨어러블 API
+            - wear-sdk                    : (선택) Wear OS SDK
+        -->
+        <uses-library
+            android:name="com.google.android.wearable"
+            android:required="true" />
+        <uses-library
+            android:name="wear-sdk"
+            android:required="false" />
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="true" />
 
-    <activity
-        android:name="androidx.health.connect.client.HealthConnectClient"
-        android:exported="false"
-        android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!--
+            - 워치에서 앱을 실행했을 때 처음 뜨는 화면
+            - 알림/센서 권한 요청 → PeriodicDataService 시작 트리거 역할
+        -->
+        <activity
+            android:name=".presentation.MainActivity"
+            android:exported="true"
+            android:taskAffinity=""
+            android:theme="@style/MainActivityTheme.Starting">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
-    <activity
-        android:name=".presentation.theme.MainActivity"
-        android:exported="true"
-        android:taskAffinity=""
-        android:theme="@style/MainActivityTheme.Starting">
-        <intent-filter>
-            <action android:name="android.intent.action.MAIN" />
-            <category android:name="android.intent.category.LAUNCHER" />
-        </intent-filter>
-
-        <intent-filter>
-            <action android:name="androidx.health.connect.client.action.REQUEST_PERMISSIONS" />
-        </intent-filter>
-    </activity>
-
-    <service
-        android:name=".presentation.PeriodicDataService"
-        android:enabled="true"
-        android:exported="false"
-        android:foregroundServiceType="dataSync" />
-
-</application>
+        <!--
+            PeriodicDataService
+            - 백그라운드에서 주기적으로 생체 데이터를 수집 -> Firestore(users/{userId}/raw_periodic)에 저장
+        -->
+        <service
+            android:name=".presentation.PeriodicDataService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
 
 </manifest>
