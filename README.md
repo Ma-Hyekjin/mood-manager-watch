@@ -18,13 +18,12 @@
 
 # 1. Firestore Collection 구조
 
+```python
 users/
 └── testUser/
     ├── raw_periodic/ ← 1분 간격 바이탈 데이터
     └── raw_events/ ← 웃음/한숨 등 오디오 이벤트
-
----
-
+```
 
 ---
 
