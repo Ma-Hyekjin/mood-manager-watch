@@ -3,6 +3,7 @@ package com.moodmanager.watch.presentation
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -19,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.wear.compose.foundation.lazy.ScalingLazyListState
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Scaffold
@@ -28,63 +30,66 @@ import androidx.wear.compose.material.scrollAway
 import com.moodmanager.watch.presentation.theme.MoodManagerWatchTheme
 
 /**
-    MainActivity - 워치에서 앱을 실행했을 때 가장 먼저 뜨는 화면.
-
-        1) 알림 권한 요청
-        2) 심박 등을 측정하기 위한 센서 권한 요청
-        3) 사용자가 권한을 준 후 PeriodicDataService를 시작
-        4) "Mood Manager \n 데이터 수집 중..." UI 표시 (불필요한 화면이지만 없으면 어색해서 추가)
-
+ * 🕒 Mood Manager – 메인 액티비티
+ *
+ * 역할 정리:
+ *  - 앱이 실행되면:
+ *      1) 알림 권한(POST_NOTIFICATIONS) 확인 및 요청
+ *      2) 생체 데이터 수집용 Foreground Service (PeriodicDataService) 시작
+ *      3) 마이크 권한(RECORD_AUDIO) 확인 및 요청
+ *      4) 오디오 이벤트 수집용 Foreground Service (AudioEventService) 시작
+ *  - 화면에는 간단히 "Mood Manager / 데이터 수집 중..." 만 표시
+ *
+ * 실제 데이터 수집 로직은 모두 Service 쪽(PeriodicDataService / AudioEventService)에 있고,
+ * 이 액티비티는 "권한 요청 + 서비스 시작 + 간단한 UI"만 담당한다.
  */
 class MainActivity : ComponentActivity() {
 
     private val TAG = "MainActivity"
 
-    /**
-     알림 권한 요청 런처
-     - Android 13 에서 알림을 보여주기 위해 필요한 런타임 권한
-     - 포그라운드 서비스 알림을 사용자에게 노출하기 위해 사용
-     */
+    // ---------------------------------------------------
+    // 🔔 알림 권한 런타임 요청 (POST_NOTIFICATIONS)
+    //   - Wear OS에서도 알림 채널을 통해 FGS 알림을 제대로 보여주기 위해 사용
+    //   - 거절되어도 치명적이진 않아서, 결과와 상관 없이 다음 단계로 진행
+    // ---------------------------------------------------
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (!isGranted) {
-            Log.w(TAG, "Notification permission denied.")
-        }
-        // 허용/거부 여부 상관 없이 → 다음 단계인 센서 권한 요청으로 진행
-        checkAndRequestBodySensorPermission()
+    ) { _: Boolean ->
+        Log.d(TAG, "Notification permission result received.")
+        // 알림 권한 절차가 끝났으니 → 서비스 시작 단계로 진입
+        startServicesAfterNotificationStep()
     }
 
-    /**
-     신체 센서 권한 요청 런처
-     - Health Services를 통해 심박/활동 데이터에 접근하기 위해 필요한 런타임 권한
-     - 허용되지 않으면 실제 생체 데이터 수집이 불가능
-     */
-    private val requestBodySensorPermissionLauncher = registerForActivityResult(
+    // ---------------------------------------------------
+    // 🎙 마이크 권한 런타임 요청 (RECORD_AUDIO)
+    //   - 허용되면: AudioEventService에서 실제 AudioRecord 사용 가능
+    //   - 거절되면: AudioEventService가 fallback(랜덤 이벤트)만 사용하게 됨
+    // ---------------------------------------------------
+    private val requestAudioPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            Log.d(TAG, "BODY_SENSORS permission granted.")
+            Log.d(TAG, "RECORD_AUDIO permission granted.")
+            startAudioEventService()
         } else {
-            Log.w(TAG, "BODY_SENSORS permission denied. Using only dummy data.")
+            Log.w(TAG, "RECORD_AUDIO permission denied. AudioEventService will not start.")
+            // 필요하다면 여기서 UI로 "마이크 권한이 없어 웃음/한숨 이벤트는 기록되지 않습니다" 안내 가능
         }
-        // 센서 권한 허용 여부와 관계 없이 일단 서비스는 시작 (더미 데이터라도 전송 가능)
-        startPeriodicService()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 앱 실행과 동시에 권한 플로우 시작:
-        // 1) 알림 권한 → 2) 센서 권한 → 3) PeriodicDataService 실행
+        // 1) 앱 시작 시 권한/서비스 플로우 시작
         checkAndRequestNotificationPermission()
 
-        // 워치 UI 설정
+        // 2) 워치 화면 UI 구성
         setContent {
             MoodManagerWatchTheme {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     timeText = {
+                        // 상단에 현재 시간 표시 (Wear OS 기본 구성요소)
                         TimeText(
                             modifier = Modifier.scrollAway(ScalingLazyListState())
                         )
@@ -115,39 +120,104 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     권한 플로우 1단계: 알림 권한 확인 및 요청
-     - Android 13 이상에서만 런타임 권한 요청 필요
-     - 그 이하 버전에서는 바로 센서 권한 요청 단계로 넘어감
-     */
+    // ---------------------------------------------------
+    // 1단계: 알림 권한 확인 → 필요하면 요청
+    //
+    //  - Android 13(TIRAMISU) 이상: POST_NOTIFICATIONS 런타임 권한 필요
+    //  - 이하 버전: 권한 개념이 없으므로 바로 다음 단계로 진행
+    // ---------------------------------------------------
     private fun checkAndRequestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            val hasPermission = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (hasPermission) {
+                Log.d(TAG, "POST_NOTIFICATIONS already granted.")
+                startServicesAfterNotificationStep()
+            } else {
+                Log.d(TAG, "Requesting POST_NOTIFICATIONS...")
+                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
         } else {
-            // 알림 권한이 별도로 필요 없는 버전 → 바로 센서 권한 요청
-            checkAndRequestBodySensorPermission()
+            // Android 12 이하: 별도 알림 권한 없음 → 바로 진행
+            startServicesAfterNotificationStep()
         }
     }
 
-    /**
-     권한 플로우 2단계: 센서 권한 확인 및 요청
+    // ---------------------------------------------------
+    // 2단계: 알림 권한 절차 끝난 후 → 실제 서비스들 시작
+    //
+    //  - (1) PeriodicDataService : 1분마다 생체 데이터 수집 → raw_periodic 저장
+    //  - (2) AudioEventService   : 마이크 기반 웃음/한숨 탐지 → raw_events 저장
+    // ---------------------------------------------------
+    private fun startServicesAfterNotificationStep() {
+        // (1) 생체 데이터 주기 수집 서비스 시작
+        startPeriodicService()
 
-     - Health Services를 통해 심박/활동 데이터를 사용하려면 반드시 필요
-     - 지금은 간단히 "요청만 하고, 결과는 콜백에서 처리"하도록 구현
-     */
-    private fun checkAndRequestBodySensorPermission() {
-        // BODY_SENSORS는 "위험 권한"이므로 런타임 요청이 필요하다.
-        requestBodySensorPermissionLauncher.launch(Manifest.permission.BODY_SENSORS)
+        // (2) 오디오 이벤트 수집 서비스 시작 (마이크 권한 체크 포함)
+        checkAndRequestAudioPermission()
     }
 
-    /**
-     최종: 주기적 데이터 수집 시작
-     - PeriodicDataService: 포그라운드 서비스로 동작하면서, 일정 주기마다 raw_periodic 데이터를 Firestore에 기록
-     */
+    // ---------------------------------------------------
+    // 🎙 마이크 권한 확인 & 요청
+    //
+    //  - Android 6.0(M) 이상: RECORD_AUDIO 런타임 권한 필요
+    //  - 허용되면: AudioEventService 시작
+    //  - 거절되면: AudioEventService 미시작 (필요 시 fallback 전략만 사용 가능)
+    // ---------------------------------------------------
+    private fun checkAndRequestAudioPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val hasPermission = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (hasPermission) {
+                Log.d(TAG, "RECORD_AUDIO already granted.")
+                startAudioEventService()
+            } else {
+                Log.d(TAG, "Requesting RECORD_AUDIO permission...")
+                requestAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        } else {
+            // 구버전은 바로 시작 (실제 Wear OS에서는 거의 의미 없지만 형식상 처리)
+            startAudioEventService()
+        }
+    }
+
+    // ---------------------------------------------------
+    // ⏱ 생체 데이터 수집 서비스 시작 (PeriodicDataService)
+    //
+    //  - Foreground Service 로 실행
+    //  - Health Services 기반으로 심박/HRV/호흡/움직임 등 수집
+    //  - 1분마다 Firestore `raw_periodic`에 문서 추가
+    // ---------------------------------------------------
     private fun startPeriodicService() {
         Log.d(TAG, "Starting PeriodicDataService...")
         val intent = Intent(this, PeriodicDataService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+    }
 
+    // ---------------------------------------------------
+    // 🎤 오디오 이벤트 수집 서비스 시작 (AudioEventService)
+    //
+    //  - Foreground Service 로 실행
+    //  - RECORD_AUDIO 권한이 있으면:
+    //      • AudioRecord로 상시 마이크 수집
+    //      • 간단한 규칙으로 웃음/한숨 이벤트 감지
+    //      • 이벤트 구간을 WAV로 저장 후 Firestore `raw_events`에 메타데이터 기록
+    //  - 권한이 없으면:
+    //      • (서비스 내부 로직에 따라) 랜덤 fallback 이벤트만 전송하는 등 처리 가능
+    // ---------------------------------------------------
+    private fun startAudioEventService() {
+        Log.d(TAG, "Starting AudioEventService...")
+        val intent = Intent(this, AudioEventService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {

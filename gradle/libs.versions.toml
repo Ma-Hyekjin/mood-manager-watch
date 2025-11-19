@@ -11,7 +11,7 @@ coreSplashscreen = "1.0.1" # 스플래시 스크린 라이브러리
 firebaseBom = "33.1.1" # Firebase 전체 BOM (Firestore, Auth 등 버전 묶음)
 googleGmsServices = "4.4.2" # Google 서비스 플러그인 (Firebase 연동용)
 lifecycleViewmodel = "2.8.1" # ViewModel + Compose 연동용
-healthServices = "1.1.0-alpha04"
+healthServices = "1.1.0-alpha05"
 
 [libraries]
 # Wear OS 기기 간 통신용 (Play Services)
@@ -36,6 +36,7 @@ core-splashscreen = { group = "androidx.core", name = "core-splashscreen", versi
 # Firebase Firestore (실제 데이터 업로드/조회용)
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-firestore-ktx = { group = "com.google.firebase", name = "firebase-firestore-ktx" }
+firebase-storage-ktx = { group = "com.google.firebase", name = "firebase-storage-ktx" }
 # ViewModel + Compose 연동
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodel" }
 # Health Service 연동

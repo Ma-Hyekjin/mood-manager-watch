@@ -1,4 +1,3 @@
-// app/src/main/java/com/moodmanager/watch/presentation/PeriodicDataService.kt
 package com.moodmanager.watch.presentation
 
 import android.app.Notification
@@ -15,161 +14,291 @@ import androidx.core.app.NotificationCompat
 import com.google.firebase.firestore.ktx.firestore
 import com.google.firebase.ktx.Firebase
 import com.moodmanager.watch.R
+
+// Health Services (센서 접근용)
 import androidx.health.services.client.HealthServices
+import androidx.health.services.client.HealthServicesClient
+import androidx.health.services.client.MeasureCallback
 import androidx.health.services.client.MeasureClient
+import androidx.health.services.client.data.Availability
+import androidx.health.services.client.data.DataPointContainer
+import androidx.health.services.client.data.DataType
+import androidx.health.services.client.data.DataTypeAvailability
+import androidx.health.services.client.data.DeltaDataType
 
 /**
- * PeriodicDataService
+ * 🩺 Mood Manager – 주기적 생체 데이터 수집 서비스
  *
- * - 워치에서 백그라운드로 돌아가는 "포그라운드 서비스".
- * - 하는 일:
- *   1) 일정 주기(현재: 1분)에 한 번씩 실행된다.
- *   2) 그 시점의 생체 정보를 바탕으로 raw_periodic 문서를 만든다.
- *   3) Firestore(users/{userId}/raw_periodic)에 add()로 누적 저장한다.
+ * 이 서비스는 Wear OS에서 1분마다 다음 데이터를 Firestore에 전송한다.
  *
- * - Next.js 백엔드는 이 raw_periodic 스트림을 구독(onSnapshot)해서,
- *   - 스트레스 지수(1~100)
- *   - 수면 점수(1~100)
- *   를 계산/전처리하게 된다.
+ *  - heart_rate_avg        : 평균 심박수 (bpm)
+ *  - heart_rate_min        : 최소 심박수 (bpm, 임시 계산)
+ *  - heart_rate_max        : 최대 심박수 (bpm, 임시 계산)
+ *  - hrv_sdnn              : 심박 변이도 SDNN (ms, 현재는 임시값)
+ *  - respiratory_rate_avg  : 평균 호흡수 (rpm, 현재는 랜덤값)
+ *  - movement_count        : 움직임 횟수 (현재는 랜덤/임시값)
+ *  - is_fallback           : true 이면 전부 랜덤값 기반, false 이면 심박은 실제 센서 기반
+ *  - timestamp             : 수집 시각 (ms)
  *
- * 현재 단계:
- *   - Health Services의 MeasureClient까지는 초기화해두고,
- *   - 실제 데이터는 아직 "더미 랜덤 값"을 넣는 상태.
- *   - TODO: 추후 MeasureClient를 사용해 심박/호흡 데이터 등을 실제로 채워 넣는다.
+ * Firestore 경로:
+ *   users/{TEST_USER_ID}/raw_periodic/{timestamp 문자열을 문서 ID로 사용}
  */
 class PeriodicDataService : Service() {
 
     private val TAG = "PeriodicDataService"
 
-    // TODO: 추후 실제 사용자 ID와 연결 (워치-폰 페어링 or 로그인 기반)
+    // TODO: 실제에서는 Firebase Auth uid 등으로 대체
     private val TEST_USER_ID = "testUser"
 
-    // Firestore 인스턴스
+    // Cloud Firestore 인스턴스
     private val db = Firebase.firestore
 
     /**
-     * Health Services 측정 클라이언트
-     *
-     * - 심박 등 "실시간 측정 데이터"를 읽을 때 사용할 클라이언트.
-     * - 지금은 스켈레톤만 초기화해두고, 실제 값은 더미로 생성한다.
+     * 데이터 수집 간격 (밀리초)
+     * - 현재: 1분 (테스트용)
+     * - 실제 서비스에서는 10분(10 * 60 * 1000) 등으로 조정 가능
      */
-    private lateinit var measureClient: MeasureClient
+    private val PERIODIC_INTERVAL_MS =  60 * 1000L   // 5분 주기 수집
 
-    /**
-     * 데이터 수집 주기 (밀리초)
-     * - 실제 목표: 10분(10 * 60 * 1000L)
-     * - 개발/테스트 편의를 위해 현재는 1분(1 * 60 * 1000L)으로 설정.
-     */
-    private val PERIODIC_INTERVAL_MS = 1 * 60 * 1000L
-
-    // 주기 실행을 위한 Handler와 Runnable
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var runnable: Runnable
 
-    // 포그라운드 서비스 알림용 채널/ID
+    // Foreground Service 알림용 설정
     private val NOTIFICATION_CHANNEL_ID = "PeriodicDataChannel"
     private val NOTIFICATION_ID = 1
+
+    // ----------------------------
+    // 🧠 Health Services 관련 필드
+    // ----------------------------
+
+    private lateinit var healthServicesClient: HealthServicesClient
+    private lateinit var measureClient: MeasureClient
+    private lateinit var measureCallback: MeasureCallback
+
+    /**
+     * 센서 콜백에서 갱신되는 최근 심박 값 (bpm)
+     *  - 실제 워치에서만 의미 있는 값.
+     *  - 에뮬레이터에서는 거의 항상 null → fallback 로직이 작동.
+     */
+    @Volatile
+    private var latestHeartRate: Double? = null
 
     override fun onCreate() {
         super.onCreate()
 
-        // Health Services MeasureClient 초기화
-        // - 이 클라이언트를 통해 나중에 실제 심박/호흡/활동 데이터를 읽게 된다.
-        val healthServicesClient = HealthServices.getClient(this)
+        // Foreground 알림 채널 생성
+        createNotificationChannel()
+
+        // Health Services 클라이언트 초기화
+        healthServicesClient = HealthServices.getClient(this)
         measureClient = healthServicesClient.measureClient
 
-        // 포그라운드 알림 채널 생성
-        createNotificationChannel()
+        Log.d(TAG, "PeriodicDataService created. Firestore instance=$db")
+
+        // 센서 콜백 구현
+        measureCallback = object : MeasureCallback {
+            override fun onAvailabilityChanged(
+                dataType: DeltaDataType<*, *>,
+                availability: Availability
+            ) {
+                if (availability is DataTypeAvailability) {
+                    Log.d(TAG, "Sensor availability changed: $dataType = $availability")
+                }
+            }
+
+            override fun onDataReceived(data: DataPointContainer) {
+                // ✅ 심박 데이터(HEART_RATE_BPM)가 들어왔을 때 마지막 샘플 사용
+                val heartRatePoints = data.getData(DataType.HEART_RATE_BPM)
+                if (heartRatePoints.isNotEmpty()) {
+                    val lastSample = heartRatePoints.last()
+                    val value = lastSample.value
+                    val bpm = when (value) {
+                        is Double -> value
+                        is Float -> value.toDouble()
+                        is Int -> value.toDouble()
+                        is Long -> value.toDouble()
+                        else -> null
+                    }
+
+                    if (bpm != null) {
+                        latestHeartRate = bpm
+                        Log.d(TAG, "Measured heart rate from sensor: $bpm bpm")
+                    } else {
+                        Log.w(TAG, "Heart rate data point has unsupported value type: $value")
+                    }
+                }
+            }
+        }
+
+        // 심박 측정 콜백 등록 (기기에서 지원할 경우 실시간 업데이트)
+        try {
+            measureClient.registerMeasureCallback(
+                DataType.HEART_RATE_BPM,
+                measureCallback
+            )
+            Log.d(TAG, "MeasureCallback registered for HEART_RATE_BPM.")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to register MeasureCallback. Will use fallback values only.", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // 포그라운드 서비스 시작 (항상 상단 알림 유지)
+        // Foreground 서비스로 승격 (상단바에 항상 표시)
         startForeground(NOTIFICATION_ID, createNotification())
         Log.d(TAG, "Foreground Service started.")
 
-        // 주기적으로 실행할 작업 정의
+        // 1분마다 실행할 작업 정의
         runnable = Runnable {
-            Log.d(TAG, "Runnable executing: Sending periodic data...")
-
-            // 1. (현재는) 더미 데이터 생성 후 Firestore로 전송
-            // 2. (향후) measureClient를 통해 실제 센서 데이터를 읽고, 아래 함수 내부를 교체 예정
-            sendDummyPeriodicData()
-
-            // 다음 실행 예약
+            Log.d(TAG, "Runnable executing: collecting periodic data and sending to Firestore...")
+            collectAndSendPeriodicData()
             handler.postDelayed(runnable, PERIODIC_INTERVAL_MS)
         }
 
-        // 서비스 시작 시 즉시 한 번 실행하고, 이후 주기적으로 반복
+        // 즉시 한 번 실행 후, 이후부터 주기적으로 반복
         handler.post(runnable)
 
-        // START_STICKY:
-        // - 시스템이 메모리 부족으로 서비스를 제거해도,
-        //   여유가 생기면 다시 자동으로 재시작하도록 요청.
         return START_STICKY
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // 예약된 Runnable 제거 (메모리 릭 방지)
         handler.removeCallbacks(runnable)
         Log.d(TAG, "Foreground Service stopped.")
     }
 
-    /**
-     [주기적 데이터] raw_periodic 문서를 생성하여 Firestore에 업로드
+    override fun onBind(intent: Intent?): IBinder? = null
 
-     지금은 개발 단계이므로 "랜덤 더미 값"을 사용하고, 나중에 Health Services 측정값으로 교체 예정
+    // -------------------------------------------------
+    // 🔁 1분마다 실행되는 "수집 → Firestore 전송" 메인 로직
+    // -------------------------------------------------
 
-     필드 요약 (Next.js/ML 관점)
-     - timestamp            : 수집 시각(ms)
-     - heart_rate_avg       : 10분 평균 심박수 (bpm)
-     - hrv_sdnn             : 심박 변이도 SDNN (ms), 낮을수록 스트레스↑
-     - respiratory_rate_avg : 평균 호흡수 (회/분), 높을수록 긴장 상태 가능성↑
-     - movement_count       : 해당 구간 내 움직임 횟수, 수면 중에는 낮을수록 깊은 수면
-     */
-    private fun sendDummyPeriodicData() {
-        val periodicData = hashMapOf(
-            "timestamp" to System.currentTimeMillis(),
+    private fun collectAndSendPeriodicData() {
+        val timestamp = System.currentTimeMillis()
 
-            // (더미) 10분 평균 심박수 (60~85 bpm)
-            "heart_rate_avg" to (60..85).random(),
+        // 1) 센서 기반 데이터 구성 시도
+        val sensorPayload = buildSensorBasedPayloadOrNull(timestamp)
 
-            // (더미) 심박 변이도 SDNN (20~70 ms)
-            "hrv_sdnn" to (20..70).random(),
+        // 2) 센서 값이 없으면 fallback 랜덤값 사용
+        val payload: Map<String, Any> = sensorPayload ?: buildFallbackPayload(timestamp)
 
-            // (더미) 평균 호흡수 (12~20 회/분)
-            "respiratory_rate_avg" to (12..20).random(),
+        // 문서 ID를 timestamp 문자열로 고정해서 디버깅/정렬 쉽게
+        val docId = timestamp.toString()
 
-            // (더미) 움직임 횟수 (0~15 회)
-            "movement_count" to (0..15).random()
-        )
+        Log.d(TAG, ">>> WILL SAVE PERIODIC DATA to Firestore: docId=$docId, data=$payload")
 
-        db.collection("users").document(TEST_USER_ID)
-            .collection("raw_periodic")
-            .add(periodicData)
-            .addOnSuccessListener {
-                Log.d(TAG, "Periodic data added successfully via Service!")
-            }
-            .addOnFailureListener { e ->
-                Log.w(TAG, "Error adding periodic data via Service", e)
-            }
+        // 🔥 여기 부분에서 뭐가 터지는지 보기 위해 try/catch + onComplete 추가
+        try {
+            val colRef = db.collection("users")
+                .document(TEST_USER_ID)
+                .collection("raw_periodic")
+
+            Log.d(TAG, "Firestore collection path: ${colRef.path}")
+
+            colRef
+                .document(docId)
+                .set(payload)
+                .addOnSuccessListener {
+                    Log.d(
+                        TAG,
+                        "✅ Periodic data saved to Firestore. docId=$docId"
+                    )
+                }
+                .addOnFailureListener { e ->
+                    Log.e(
+                        TAG,
+                        "❌ Error adding periodic data to Firestore (docId=$docId): ${e.message}",
+                        e
+                    )
+                }
+                .addOnCompleteListener { task ->
+                    Log.d(
+                        TAG,
+                        "🔥 Firestore write COMPLETE (raw_periodic). success=${task.isSuccessful}, docId=$docId"
+                    )
+                }
+        } catch (e: Exception) {
+            Log.e(TAG, "💥 Synchronous exception before Firestore write (raw_periodic)", e)
+        }
     }
 
-    // 포그라운드 서비스용 알림 채널 생성 - Android 8.0 이상에서 알림을 표시하기 위해 채널 필요
+    /**
+     * ✅ 센서 기반 payload 구성
+     *
+     * - latestHeartRate가 null이면 → 센서 값이 아직 없다고 판단하고 null 리턴 → fallback 사용
+     * - 호흡수 / HRV / 움직임은 지금은 간단한 파생/랜덤값으로 채우고,
+     *   나중에 가속도 센서/추가 API 붙이면 실제 계산 로직으로 교체 가능.
+     */
+    private fun buildSensorBasedPayloadOrNull(timestamp: Long): Map<String, Any>? {
+        val hr = latestHeartRate ?: return null
+
+        val heartRateAvg = hr.toInt()
+        val heartRateMin = (heartRateAvg - 5).coerceAtLeast(40)
+        val heartRateMax = (heartRateAvg + 10).coerceAtMost(150)
+
+        // TODO: 나중에 실제 HRV 계산 로직으로 교체 (연속적인 rr-interval 기반)
+        val hrvSdnn = (30..70).random()
+
+        // TODO: 나중에 호흡/움직임도 실제 센서에서 추출
+        val respiratoryRateAvg = (12..20).random()
+        val movementCount = (0..10).random()
+
+        return mapOf(
+            "timestamp" to timestamp,
+            "heart_rate_avg" to heartRateAvg,
+            "heart_rate_min" to heartRateMin,
+            "heart_rate_max" to heartRateMax,
+            "hrv_sdnn" to hrvSdnn,
+            "respiratory_rate_avg" to respiratoryRateAvg,
+            "movement_count" to movementCount,
+            // 심박은 실제 센서 측정값을 기반으로 했다는 표시
+            "is_fallback" to false
+        )
+    }
+
+    /**
+     * ✅ fallback payload
+     *
+     * - 에뮬레이터, 센서 미지원, 초기 구동 등에서 사용되는 정상 범위 랜덤값.
+     * - Next.js / ML 서버에서는 is_fallback=true 인 레코드는
+     *   “테스트/시뮬레이션용”으로 구분해서 처리 가능.
+     */
+    private fun buildFallbackPayload(timestamp: Long): Map<String, Any> {
+        val heartRateAvg = (60..85).random()
+        val heartRateMin = (45..60).random()
+        val heartRateMax = (90..120).random()
+
+        val hrvSdnn = (20..70).random()
+        val respiratoryRateAvg = (12..20).random()
+        val movementCount = (0..15).random()
+
+        return mapOf(
+            "timestamp" to timestamp,
+            "heart_rate_avg" to heartRateAvg,
+            "heart_rate_min" to heartRateMin,
+            "heart_rate_max" to heartRateMax,
+            "hrv_sdnn" to hrvSdnn,
+            "respiratory_rate_avg" to respiratoryRateAvg,
+            "movement_count" to movementCount,
+            "is_fallback" to true
+        )
+    }
+
+    // ----------------------------
+    // 🔔 Foreground 알림 관련 코드
+    // ----------------------------
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val serviceChannel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
-                "Mood Manager Data Collection",    // 설정 화면에 보이는 채널 이름
-                NotificationManager.IMPORTANCE_LOW // 백그라운드 작업 → 낮은 중요도
+                "Mood Manager Data Collection",
+                NotificationManager.IMPORTANCE_LOW
             )
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(serviceChannel)
         }
     }
 
-    // 포그라운드 서비스 유지용 알림 - 해당 알림을 통해 "현재 워치가 Mood Manager 데이터를 수집 중"이라는 사실을 인지 가능
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Mood Manager")
@@ -177,10 +306,5 @@ class PeriodicDataService : Service() {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)
             .build()
-    }
-
-    // 바인딩 방식은 사용하지 않으므로 null 반환
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
     }
 }

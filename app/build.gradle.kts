@@ -59,6 +59,8 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     // Firestore (원격 DB, raw_periodic / raw_events 저장)
     implementation(libs.firebase.firestore.ktx)
+    // Firestore audio 업로드
+    implementation(libs.firebase.storage.ktx)
     // ViewModel + Compose
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     // 기본 Compose UI
@@ -75,6 +77,7 @@ dependencies {
     implementation(libs.core.splashscreen)
     // Health Services (Wear OS 센서 직접 접근)
     implementation(libs.androidx.health.services.client)
+
     // 테스트용 의존성
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.ui.test.junit4)

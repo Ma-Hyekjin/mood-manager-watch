@@ -1,8 +1,8 @@
 # 무드매니저 (Mood Manager) - Wear OS
 
-'무드매니저' AI 웰니스 플랫폼의 1계층(Data Collection)을 담당하는 Wear OS 네이티브 앱.
+'무드매니저' 프로젝트 - Data Collection 담당 Wear OS 네이티브 앱.
  
-`Health Connect API`, `AudioRecord` 등을 통해 사용자의 생체 신호(스트레스, 수면 패턴 등)와 음성 데이터를 수집 후 **Firebase Firestore**로 전송.
+`Health Service`, `AudioRecord` 등을 통해 사용자의 생체 신호(스트레스, 수면 패턴 등)와 음성 데이터를 수집 후 **Firebase Firestore**로 전송.
 
 ---
 
@@ -10,41 +10,123 @@
 
 * **Language**: `Kotlin`
 * **Platform**: `Android / Wear OS SDK`
-* **Key APIs/SDKs**: `Firebase SDK (Kotlin)`, `Health Connect API`
+* **Key APIs/SDKs**: `Firebase SDK (Kotlin)`, `Health Service`
 * **Background**: `ForegroundService`
 * *(예정)*: `AudioRecord`, `Porcupine SDK`
 
 ---
 
-## 🌟 현재 상태 (Current Status)
+# 1. Firestore Collection 구조
 
-### P1: 기본 파이프라인 구축 완료 (2025-11-11)
- 
-`[Wear OS]` -> `[Firebase]` -> `[Web App]`으로 이어지는 기본 데이터 파이프라인의 정상 작동을 확인.
-
-Wear OS 앱의 버튼을 클릭하면, 더미(dummy) 생체 신호가 Firestore에 실시간으로 전송(`set`)되며, 이는 Next.js 웹 앱에서 성공적으로 수신(`onSnapshot`)되는 것을 확인.
-
-* **P1 파이프라인 기여자**: 마혁진, 안준성
+users/
+└── testUser/
+    ├── raw_periodic/ ← 1분 간격 바이탈 데이터
+    └── raw_events/ ← 웃음/한숨 등 오디오 이벤트
 
 ---
 
-## ✅ 앞으로 해야 할 일 (Next Steps)
-
-P1의 기본 파이프라인이 완성됨에 따라, P2/P3의 핵심 기능 개발을 시작. (우선순위 순으로 정렬)
-
-### P1: 앱 안정화 (Stabilization)
-- [ ] **필수 권한 요청 로직**: `Health Connect` 및 `마이크` 사용을 위한 런타임 권한 요청 팝업 로직을 구현.
-- [ ] **`ForegroundService` 적용**: 현재는 `MainActivity`가 켜져 있을 때만 작동. 앱이 백그라운드에 있거나 꺼져있을 때도 데이터를 수집할 수 있도록 `ForegroundService`로 로직 이전 필요.
-
-### P2: 핵심 데이터 연동 (Core Data Integration)
-- [ ] **`Health Connect` 연동**: `(60..100).random()` 같은 더미 데이터 대신, `Health Connect API`를 통해 실제 **스트레스 지수** 및 **수면 패턴** 데이터를 특정 주기 가져오도록 로직 교체 필요.
-- [ ] **`Porcupine SDK` 연동 (Wake Word)**: 한숨, 웃음 같은 웨이크 워드를 감지하고, 감지 이벤트를 Firestore로 전송하는 기능을 구현.
-
-### P3: 기능 고도화 (Enhancement)
-- [ ] **음성 데이터 수집**: 웨이크 워드 감지 후, `AudioRecord` API를 통해 사용자의 음성 데이터를 수집하고 전송.
 
 ---
 
+# 2. raw_periodic (1분 간격 생체 정보)
+
+WearOS `PeriodicDataService`가 기록.
+
+**문서 ID:** timestamp(ms) 문자열  
+**예시 경로:** `users/testUser/raw_periodic/1763532000123`
+
+### 필드
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| timestamp | number | Unix time(ms) |
+| heart_rate_avg | number | 평균 심박 |
+| heart_rate_min | number | 최소 심박 |
+| heart_rate_max | number | 최대 심박 |
+| hrv_sdnn | number | 20–70 랜덤(임시), 향후 RR 기반 |
+| respiratory_rate_avg | number | 호흡수 |
+| movement_count | number | 움직임 수 |
+| is_fallback | boolean | 센서 실측 여부 플래그 |
+
+---
+
+# 3. raw_events (웃음/한숨 오디오 이벤트)
+
+WearOS `AudioEventService`가 1분마다 2초 녹음 →  
+유효 이벤트만 저장(조용/unknown 제외).
+
+이벤트가 **1시간 동안 없으면 더미 데이터 자동 생성**.
+
+**예시 경로:**  
+`users/testUser/raw_events/autoDocId12345`
+
+### 필드
+| 필드 | 타입 | 설명 |
+|------|------|------|
+| timestamp | number | 이벤트 시간 |
+| event_type_guess | string | `"laughter"` / `"sigh"` |
+| event_dbfs | number | 상대 음량 (0–100) |
+| event_duration_ms | number | 보통 2000ms |
+| audio_base64 | string? | Base64 WAV(무음 시 null) |
+| is_fallback | boolean | 현재 휴리스틱 기반 |
+
+---
+
+# 4. WAV(Base64) 포맷 설명
+
+WearOS는:
+
+- PCM 16bit
+- mono
+- sample rate = **8000 Hz**
+- WAV 헤더 + PCM body를 합쳐 Base64로 인코딩한다.
+
+### 디코딩 규칙 (Python)
+
+```python
+import base64
+import io
+import soundfile as sf
+
+def decode_base64_wav(base64_str):
+    wav_bytes = base64.b64decode(base64_str)
+    return sf.read(io.BytesIO(wav_bytes))  # (audio, samplerate)
+```
+
+ML 모델은 이를 바로 numpy waveform으로 사용하면 된다.
+
+---
+
+# 5. ML 파이프 라인 예시
+
+```python
+audio, sr = decode_base64_wav(doc["audio_base64"])
+prediction = model(audio, sr)
+print(prediction)
+```
+---
+
+# 6. 백엔드 전처리 규칙 (Next.js)
+- raw_periodic -> 수면 판정/스트레스 지수 계산
+- raw_events -> 감정 타임라인 구성
+
+- 심박+움직임 ↓ 장시간 → 수면으로 가정 
+- 아침~저녁 변화량 기반 스트레스 스코어 
+- sigh 증가 → 스트레스 민감도 증가 
+- laughter 증가 → 긍정 이벤트 지표
+
+---
+# 7. 정리
+
+| 항목           | 규칙                              |
+| ------------ | ------------------------------- |
+| 오디오 unknown  | 저장하지 않음                         |
+| 무음           | 저장하지 않음                         |
+| 실제 이벤트 발생    | 저장                              |
+| 1시간 이벤트 없음   | 랜덤 더미 1개                        |
+| Base64.wav   | ML에서 다시 WAV로 디코딩 가능             |
+| Firestore 경로 | 반드시 `users/testUser/raw_events` |
+
+---
 ## 🚀 시작하기 (Getting Started)
 
 1.  본 프로젝트를 Android Studio (권장 버전: Otter | 2025.2.1)에서 연다.
