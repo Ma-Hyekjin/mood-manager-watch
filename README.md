@@ -50,8 +50,7 @@ WearOS `PeriodicDataService`가 기록.
 
 # 3. raw_events (웃음/한숨 오디오 이벤트)
 
-WearOS `AudioEventService`가 1분마다 2초 녹음 →  
-유효 이벤트만 저장(조용/unknown 제외).
+WearOS `AudioEventService`가 1분마다 2초 녹음 → 유효 이벤트만 저장(조용/unknown 제외).
 
 이벤트가 **1시간 동안 없으면 더미 데이터 자동 생성**.
 
